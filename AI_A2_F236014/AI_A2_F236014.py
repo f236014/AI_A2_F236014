@@ -220,5 +220,196 @@ def astar(grid, start, goal, h_fn):
     return None, visited_order, frontier_snaps   # no path exists
 
 
+# ─────────────────────────────────────────────────────────────
+# Manages the 2-D grid array and the tkinter canvas that
+# draws it.  Also handles all mouse input.
+# ─────────────────────────────────────────────────────────────
+
+import random
+import tkinter as tk
+from constants import (
+    EMPTY, WALL, START, GOAL,
+    CELL_SIZE, COLORS
+)
+
+
+class Grid:
+    """
+    Holds the grid data and owns the tkinter Canvas widget.
+
+    Attributes
+    ----------
+    rows, cols : grid dimensions
+    grid       : 2-D list of cell codes (EMPTY / WALL / START / GOAL)
+    start      : (row, col) of the start cell
+    goal       : (row, col) of the goal cell
+    canvas     : the tkinter Canvas this grid is drawn on
+    mode_var   : tk.StringVar controlled by the draw-mode radio buttons
+    """
+
+    def __init__(self, parent_frame, rows, cols, mode_var):
+        """
+        Parameters
+        ----------
+        parent_frame : tkinter frame to place the canvas inside
+        rows, cols   : initial grid size
+        mode_var     : tk.StringVar — value is "wall"/"erase"/"start"/"goal"
+        """
+        self.rows     = rows
+        self.cols     = cols
+        self.mode_var = mode_var
+        self.grid     = []
+        self.start    = (0, 0)
+        self.goal     = (rows - 1, cols - 1)
+
+        # Create the canvas
+        self.canvas = tk.Canvas(
+            parent_frame,
+            width             = cols * CELL_SIZE,
+            height            = rows * CELL_SIZE,
+            bg                = COLORS[EMPTY],
+            highlightthickness = 0
+        )
+        self.canvas.pack(anchor="nw")
+
+        # Bind mouse events
+        self.canvas.bind("<Button-1>",  self._on_click)     # left-click
+        self.canvas.bind("<B1-Motion>", self._on_drag)      # left-click drag
+        self.canvas.bind("<Button-3>",  self._on_rclick)    # right-click = erase
+
+        self.reset()
+
+    # ── Grid initialisation ──────
+
+    def reset(self):
+        """Clear everything and place start (top-left) and goal (bottom-right)."""
+        self.grid  = [[EMPTY] * self.cols for _ in range(self.rows)]
+        self.start = (0, 0)
+        self.goal  = (self.rows - 1, self.cols - 1)
+        self.grid[0][0]                         = START
+        self.grid[self.rows - 1][self.cols - 1] = GOAL
+        self.redraw()
+
+    def resize(self, rows, cols):
+        """Change grid dimensions and reset."""
+        self.rows = rows
+        self.cols = cols
+        self.canvas.config(width=cols * CELL_SIZE, height=rows * CELL_SIZE)
+        self.reset()
+
+    def random_map(self, density):
+        """
+        Fill grid with random walls.
+
+        Parameters
+        ----------
+        density : float 0.0–1.0 — fraction of cells that become walls
+        """
+        self.reset()
+        for r in range(self.rows):
+            for c in range(self.cols):
+                if (r, c) not in (self.start, self.goal):
+                    if random.random() < density:
+                        self.grid[r][c] = WALL
+        self.redraw()
+
+    # ── Drawing ───────────────────────────────────────────────
+
+    def redraw(self):
+        """Redraw every cell from scratch."""
+        self.canvas.delete("all")
+        for r in range(self.rows):
+            for c in range(self.cols):
+                self.draw_cell(r, c)
+
+    def draw_cell(self, r, c, override=None):
+        """
+        Draw a single cell rectangle.
+
+        Parameters
+        ----------
+        r, c     : grid position
+        override : optional hex colour string — lets the animator
+                   colour cells without changing grid data
+        """
+        x1, y1 = c * CELL_SIZE, r * CELL_SIZE
+        color   = override if override else COLORS[self.grid[r][c]]
+        self.canvas.create_rectangle(
+            x1, y1,
+            x1 + CELL_SIZE, y1 + CELL_SIZE,
+            fill    = color,
+            outline = COLORS["grid"],
+            width   = 1
+        )
+
+    def refresh_all_cells(self):
+        """Redraw every cell from grid data (clears animation colours)."""
+        for r in range(self.rows):
+            for c in range(self.cols):
+                self.draw_cell(r, c)
+
+    # ── Mouse input ─────────────
+
+    def _pixel_to_cell(self, event):
+        """Convert a pixel (x, y) mouse position to (row, col)."""
+        col = max(0, min(event.x // CELL_SIZE, self.cols - 1))
+        row = max(0, min(event.y // CELL_SIZE, self.rows - 1))
+        return row, col
+
+    def _on_click(self, event):
+        self._apply_draw(*self._pixel_to_cell(event))
+
+    def _on_drag(self, event):
+        self._apply_draw(*self._pixel_to_cell(event))
+
+    def _on_rclick(self, event):
+        """Right-click always erases (except start and goal cells)."""
+        r, c = self._pixel_to_cell(event)
+        if self.grid[r][c] not in (START, GOAL):
+            self.grid[r][c] = EMPTY
+            self.draw_cell(r, c)
+
+    def _apply_draw(self, r, c):
+        """
+        Apply the currently selected draw mode to cell (r, c).
+        mode_var is set by the Draw Mode radio buttons in the sidebar.
+        """
+        mode = self.mode_var.get()
+        cell = self.grid[r][c]
+
+        if mode == "wall":
+            if cell in (START, GOAL): return    # never overwrite start/goal
+            self.grid[r][c] = WALL
+            self.draw_cell(r, c)
+
+        elif mode == "erase":
+            if cell in (START, GOAL): return
+            self.grid[r][c] = EMPTY
+            self.draw_cell(r, c)
+
+        elif mode == "start":
+            # remove the old start marker
+            sr, sc = self.start
+            self.grid[sr][sc] = EMPTY
+            self.draw_cell(sr, sc)
+            # place new start
+            self.start        = (r, c)
+            self.grid[r][c]   = START
+            self.draw_cell(r, c)
+
+        elif mode == "goal":
+            # remove the old goal marker
+            gr, gc = self.goal
+            self.grid[gr][gc] = EMPTY
+            self.draw_cell(gr, gc)
+            # place new goal
+            self.goal         = (r, c)
+            self.grid[r][c]   = GOAL
+            self.draw_cell(r, c)
+
+
+
+
+
 
 
