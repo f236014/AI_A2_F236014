@@ -640,6 +640,316 @@ class Animator:
 
 
 
+       
+# ─────────────────────────────────────────────────────────────
+# Entry point 
+# FILE OVERVIEW:
+#   constants.py  — colours, sizes, cell codes
+#   heuristics.py — manhattan() and euclidean()
+#   algorithms.py — greedy_bfs() and astar()
+#   grid.py       — Grid class (canvas + mouse drawing)
+#   animator.py   — Animator class (search + agent animation)
+#   main.py       — App class (sidebar GUI) + entry point  ← YOU ARE HERE
+# ─────────────────────────────────────────────────────────────
+
+import tkinter as tk
+from tkinter import messagebox
+import time
+
+from constants  import EMPTY, WALL, START, GOAL, DEFAULT_ROWS, DEFAULT_COLS, COLORS
+from heuristics import manhattan, euclidean
+from algorithms import astar, greedy_bfs
+from grid       import Grid
+from animator   import Animator
+
+
+class App:
+    """
+    Main application window.
+    Builds the sidebar with all controls and connects them to
+    the Grid and Animator objects.
+    """
+
+    def __init__(self, root):
+        self.root = root
+        root.title("AI 2002 – Q6 | Dynamic Pathfinding Agent")
+        root.configure(bg=COLORS["bg"])
+        root.resizable(True, True)
+
+        # ── Control variables (read by sidebar widgets) ───
+        
+        self.algo_var = tk.StringVar(value="A*")
+        self.h_var    = tk.StringVar(value="Manhattan")
+        self.mode_var = tk.StringVar(value="wall")
+        self.dyn_var  = tk.BooleanVar(value=False)
+
+        # Metric display (shown in sidebar, updated after each search)
+        self.m_nodes = tk.StringVar(value="0")
+        self.m_cost  = tk.StringVar(value="0")
+        self.m_time  = tk.StringVar(value="0.00 ms")
+        self.metrics = {"nodes": self.m_nodes,
+                        "cost" : self.m_cost,
+                        "time" : self.m_time}
+
+        # Build sidebar first so we can reference its frame
+        self._build_sidebar()
+
+        # Canvas frame (right of sidebar)
+        cf = tk.Frame(root, bg="#bbbbbb", bd=1, relief=tk.SUNKEN)
+        cf.pack(side=tk.LEFT, fill=tk.BOTH, expand=True, padx=6, pady=6)
+
+        # Grid object — owns the tkinter Canvas and the 2-D grid data
+        self.grid_obj = Grid(cf, DEFAULT_ROWS, DEFAULT_COLS, self.mode_var)
+
+        # Animator object — drives step-by-step animation and agent movement
+        self.animator = Animator(
+            root        = root,
+            grid_obj    = self.grid_obj,
+            algo_var    = self.algo_var,
+            h_fn_getter = self._get_h,
+            metrics     = self.metrics,
+        )
+
+   
+    #  SIDEBAR CONSTRUCTION
+ 
+
+    def _build_sidebar(self):
+        SB = COLORS["sidebar"]
+
+        sb = tk.Frame(self.root, bg=SB, relief=tk.RIDGE, bd=1,
+                      padx=8, pady=8, width=200)
+        sb.pack(side=tk.LEFT, fill=tk.Y)
+        sb.pack_propagate(False)
+
+        # ── Tiny helper functions used only inside this method ──
+
+        def section(text):
+            tk.Frame(sb, bg="#aaaaaa", height=1).pack(fill=tk.X, pady=(8, 3))
+            tk.Label(sb, text=text, bg=SB, fg="#222222",
+                     font=("Arial", 8, "bold"), anchor="w").pack(fill=tk.X)
+
+        def radio_group(var, options):
+            """Create a set of radio buttons that all write to the same var."""
+            for val, label in options:
+                tk.Radiobutton(
+                    sb, text=label, variable=var, value=val,
+                    bg=SB, fg="#111111",
+                    activebackground=SB, selectcolor="#cccccc",
+                    font=("Arial", 9), anchor="w"
+                ).pack(fill=tk.X)
+
+        def btn(text, cmd, bg="#dddddd", fg="#000000"):
+            tk.Button(sb, text=text, command=cmd, bg=bg, fg=fg,
+                      relief=tk.RAISED, font=("Arial", 8, "bold"),
+                      cursor="hand2").pack(fill=tk.X, pady=2)
+
+        # Title
+        tk.Label(sb, text="Pathfinding Agent", bg=SB, fg="#111111",
+                 font=("Arial", 11, "bold")).pack(pady=(0, 2))
+        tk.Label(sb, text="AI 2002 – Question 6", bg=SB, fg="#555555",
+                 font=("Arial", 8)).pack(pady=(0, 4))
+
+        # ── Grid size ──────
+        section("Grid Size")
+        sf = tk.Frame(sb, bg=SB)
+        sf.pack(fill=tk.X, pady=2)
+        for i, (lbl_text, attr) in enumerate([("Rows", "e_rows"),
+                                               ("Cols", "e_cols")]):
+            tk.Label(sf, text=f"{lbl_text}:", bg=SB,
+                     font=("Arial", 8), width=5, anchor="w").grid(
+                         row=i, column=0)
+            e = tk.Entry(sf, width=5, font=("Arial", 8))
+            e.insert(0, str(DEFAULT_ROWS if i == 0 else DEFAULT_COLS))
+            e.grid(row=i, column=1, padx=2, pady=2)
+            setattr(self, attr, e)
+        btn("Apply Size", self._apply_size)
+
+        # ── Algorithm selection ────────
+        # Writes to self.algo_var.
+        # _start() reads this to call astar() or greedy_bfs().
+        section("Algorithm")
+        radio_group(self.algo_var, [
+            ("A*",         "A*  (optimal, slower)"),
+            ("Greedy BFS", "Greedy BFS  (fast, non-optimal)"),
+        ])
+
+        # ── Heuristic selection ───────────
+        # Writes to self.h_var.
+        # _get_h() reads this and passes the function into the algorithm.
+        section("Heuristic  h(n)")
+        radio_group(self.h_var, [
+            ("Manhattan", "Manhattan  |dr|+|dc|"),
+            ("Euclidean", "Euclidean  sqrt(dr²+dc²)"),
+        ])
+
+        # ── Draw mode ─────────────────
+        # Writes to self.mode_var.
+        # Grid._apply_draw() reads this on every mouse click.
+        section("Draw Mode  (click grid)")
+        radio_group(self.mode_var, [
+            ("wall",  "Draw Wall"),
+            ("erase", "Erase"),
+            ("start", "Set Start"),
+            ("goal",  "Set Goal"),
+        ])
+
+        # ── Random map ─────────────────
+        section("Obstacle Density")
+        self.density = tk.IntVar(value=30)
+        tk.Scale(sb, from_=0, to=70, orient=tk.HORIZONTAL,
+                 variable=self.density, bg=SB,
+                 font=("Arial", 7), highlightthickness=0).pack(fill=tk.X)
+        btn("Random Map", self._random_map)
+
+        # ── Dynamic mode ────────────────
+        section("Dynamic Mode")
+        tk.Checkbutton(sb, text="Enable Dynamic Obstacles",
+                       variable=self.dyn_var, bg=SB, fg="#222222",
+                       activebackground=SB,
+                       font=("Arial", 8)).pack(anchor="w")
+        tk.Label(sb,
+                 text="(Walls spawn while agent moves;\nagent re-plans automatically)",
+                 bg=SB, fg="#666666",
+                 font=("Arial", 7), justify=tk.LEFT).pack(anchor="w")
+
+        # ── Action buttons ────────────────
+        section("Actions")
+        btn("▶  Start Search", self._start,      bg="#27ae60", fg="#ffffff")
+        btn("⏹  Stop",         self._stop,       bg="#e74c3c", fg="#ffffff")
+        btn("Clear Path",      self._clear_path)
+        btn("Clear All",       self._clear_all)
+
+        # ── Metrics ────────────────────────
+        section("Metrics")
+        for label, var in [("Nodes visited:", self.m_nodes),
+                            ("Path cost:",     self.m_cost),
+                            ("Time:",          self.m_time)]:
+            row = tk.Frame(sb, bg=SB)
+            row.pack(fill=tk.X)
+            tk.Label(row, text=label, bg=SB, fg="#555555",
+                     font=("Arial", 8), anchor="w").pack(side=tk.LEFT)
+            tk.Label(row, textvariable=var, bg=SB, fg="#000000",
+                     font=("Arial", 8, "bold"),
+                     anchor="e").pack(side=tk.RIGHT)
+
+        # ── Colour legend ────────────────────
+        section("Legend")
+        for color, name in [
+            (COLORS[START],      "Start"),
+            (COLORS[GOAL],       "Goal"),
+            (COLORS[WALL],       "Wall"),
+            (COLORS["frontier"], "Frontier (queue)"),
+            (COLORS["visited"],  "Visited"),
+            (COLORS["path"],     "Final path"),
+            (COLORS["agent"],    "Agent"),
+        ]:
+            row = tk.Frame(sb, bg=SB)
+            row.pack(fill=tk.X, pady=1)
+            tk.Label(row, bg=color, width=2,
+                     relief=tk.SOLID, bd=1).pack(side=tk.LEFT, padx=(0, 5))
+            tk.Label(row, text=name, bg=SB, fg="#222222",
+                     font=("Arial", 7)).pack(side=tk.LEFT)
+
+   
+    #  GRID SIZE
+    
+
+    def _apply_size(self):
+        try:
+            r, c = int(self.e_rows.get()), int(self.e_cols.get())
+            if not (3 <= r <= 50 and 3 <= c <= 70):
+                raise ValueError
+        except ValueError:
+            messagebox.showerror("Invalid", "Rows: 3–50   Cols: 3–70")
+            return
+        self._stop()
+        self.grid_obj.resize(r, c)
+
+    def _random_map(self):
+        self._stop()
+        self.grid_obj.random_map(self.density.get() / 100.0)
+
+    # ══════════════════════════════════════════════════════════
+    #  HEURISTIC GETTER
+    # ══════════════════════════════════════════════════════════
+
+    def _get_h(self):
+        """Return the heuristic function matching the current radio selection."""
+        return manhattan if self.h_var.get() == "Manhattan" else euclidean
+
+    # ══════════════════════════════════════════════════════════
+    #  START SEARCH
+    # ══════════════════════════════════════════════════════════
+
+    def _start(self):
+        self._stop()
+        self._clear_path()
+
+        g   = self.grid_obj
+        h   = self._get_h()
+
+        t0 = time.perf_counter()
+
+        # ── CALL THE SELECTED ALGORITHM ───────────────────────
+        if self.algo_var.get() == "A*":
+            path, v_order, f_snaps = astar(g.grid, g.start, g.goal, h)
+        else:
+            path, v_order, f_snaps = greedy_bfs(g.grid, g.start, g.goal, h)
+        # ─────────────────────────────────────────────────────
+
+        ms = (time.perf_counter() - t0) * 1000
+        self.m_nodes.set(str(len(v_order)))
+        self.m_time.set(f"{ms:.2f} ms")
+
+        if path is None:
+            self.m_cost.set("—")
+            messagebox.showwarning("No Path",
+                                   "Goal is unreachable.\nTry removing some walls.")
+            return
+
+        self.m_cost.set(str(len(path) - 1))
+
+        # Hand results to the animator
+        self.animator.run(path, v_order, f_snaps,
+                          dynamic_mode=self.dyn_var.get())
+
+    # ══════════════════════════════════════════════════════════
+    #  UTILITY ACTIONS
+    # ══════════════════════════════════════════════════════════
+
+    def _stop(self):
+        self.animator.stop()
+
+    def _clear_path(self):
+        self.animator.stop()
+        self.grid_obj.refresh_all_cells()
+        self.m_nodes.set("0")
+        self.m_cost.set("0")
+        self.m_time.set("0.00 ms")
+
+    def _clear_all(self):
+        self._stop()
+        self.grid_obj.reset()
+        self.m_nodes.set("0")
+        self.m_cost.set("0")
+        self.m_time.set("0.00 ms")
+
+
+# ─────────────────────────────────────────────────────────────
+#  ENTRY POINT
+# ─────────────────────────────────────────────────────────────
+
+if __name__ == "__main__":
+    root = tk.Tk()
+    root.update_idletasks()
+    sw, sh = root.winfo_screenwidth(), root.winfo_screenheight()
+    root.geometry(f"+{sw // 10}+{sh // 20}")
+    App(root)
+    root.mainloop()
+
+
+
 
 
 
