@@ -407,6 +407,240 @@ class Grid:
             self.grid[r][c]   = GOAL
             self.draw_cell(r, c)
 
+    
+# ─────────────────────────────────────────────────────────────
+# Handles two phases of animation
+#
+#   Phase 1 — _animate_search()
+#   Phase 2 — _move_agent()  
+#
+# Uses tkinter's root.after() for non-blocking animation
+# so the GUI stays responsive during the search.
+# ─────────────────────────────────────────────────────────────
+
+import random
+from tkinter import messagebox
+from constants import (
+    EMPTY, WALL, START, GOAL,
+    ANIM_MS, SPAWN_CHANCE, COLORS
+)
+
+
+class Animator:
+    """
+    Drives the step-by-step search animation and dynamic agent movement.
+
+    Parameters
+    ----------
+    root       : tkinter root window (needed for root.after())
+    grid_obj   : Grid instance (owns grid data + canvas drawing)
+    algo_var   : tk.StringVar — "A*" or "Greedy BFS"
+    h_fn_getter: callable that returns the current heuristic function
+    metrics    : dict with keys "nodes", "cost", "time" (tk.StringVar)
+    """
+
+    def __init__(self, root, grid_obj, algo_var, h_fn_getter, metrics):
+        self.root        = root
+        self.grid_obj    = grid_obj
+        self.algo_var    = algo_var
+        self.h_fn_getter = h_fn_getter
+        self.metrics     = metrics
+
+        self.running   = False   # True while animation is active
+        self.anim_id   = None    # ID from root.after() — lets us cancel
+
+        # Agent state (used only in dynamic mode)
+        self.agent_pos = None
+        self.cur_path  = []
+        self.path_idx  = 0
+
+    # ── Public control methods ────────────────────────────────
+
+    def stop(self):
+        """Cancel any running animation immediately."""
+        self.running = False
+        if self.anim_id:
+            self.root.after_cancel(self.anim_id)
+            self.anim_id = None
+
+    def run(self, path, visited_order, frontier_snaps, dynamic_mode):
+        """
+        Start the animation for a completed search.
+
+        Parameters
+        ----------
+        path           : solution path (list of (row,col)), or None
+        visited_order  : nodes in the order they were expanded
+        frontier_snaps : frontier state at each expansion step
+        dynamic_mode   : bool — if True, move the agent after drawing path
+        """
+        self.running = True
+
+        # Store path so the agent can follow it in dynamic mode
+        self.cur_path  = path if path else []
+        self.agent_pos = self.grid_obj.start
+        self.path_idx  = 0
+
+        self._animate_search(visited_order, frontier_snaps, path,
+                              dynamic_mode, step=0)
+
+    # ── Phase 1: animate the search expansion ─────────────────
+
+    def _animate_search(self, visited_order, frontier_snaps, path,
+                        dynamic_mode, step):
+        """
+        Reveal nodes one at a time.
+        Uses root.after() so the window stays responsive.
+        """
+        if not self.running:
+            return
+
+        if step < len(visited_order):
+            # Colour the newly expanded node blue
+            r, c = visited_order[step]
+            if self.grid_obj.grid[r][c] not in (START, GOAL):
+                self.grid_obj.draw_cell(r, c, COLORS["visited"])
+
+            # Colour frontier (queued) nodes orange
+            if step < len(frontier_snaps):
+                for fr, fc in frontier_snaps[step]:
+                    if self.grid_obj.grid[fr][fc] not in (START, GOAL, WALL):
+                        self.grid_obj.draw_cell(fr, fc, COLORS["frontier"])
+
+            # Schedule next frame
+            self.anim_id = self.root.after(
+                ANIM_MS,
+                lambda: self._animate_search(
+                    visited_order, frontier_snaps, path, dynamic_mode, step + 1)
+            )
+
+        else:
+            # ── Draw the solution path in green
+            if path:
+                for r, c in path:
+                    if self.grid_obj.grid[r][c] not in (START, GOAL):
+                        self.grid_obj.draw_cell(r, c, COLORS["path"])
+
+            if dynamic_mode and path:
+                # Begin agent movement
+                self.path_idx = 0
+                self.anim_id  = self.root.after(ANIM_MS * 3, self._move_agent)
+            else:
+                self.running = False
+
+    # ── Phase 2: move the agent (dynamic mode only)
+
+    def _move_agent(self):
+        """
+        Advance the agent one cell along cur_path.
+        After each step:
+          - Try to spawn a random wall (_spawn_obstacle).
+          - If the wall blocks the remaining path, re-plan.
+        """
+        if not self.running:
+            return
+
+        # Erase the agent marker from the previous cell
+        if self.agent_pos:
+            pr, pc = self.agent_pos
+            if self.grid_obj.grid[pr][pc] not in (START, GOAL):
+                self.grid_obj.draw_cell(pr, pc, COLORS["path"])
+
+        # Check if the agent has reached the end of the path
+        if self.path_idx >= len(self.cur_path):
+            self.running = False
+            messagebox.showinfo(
+                "Done", f"Goal reached!  Cost: {self.metrics['cost'].get()} steps")
+            return
+
+        # Move to next cell
+        self.agent_pos  = self.cur_path[self.path_idx]
+        self.path_idx  += 1
+        ar, ac = self.agent_pos
+
+        # Stop if we reached the goal cell
+        if (ar, ac) == self.grid_obj.goal:
+            self.grid_obj.draw_cell(ar, ac, COLORS[GOAL])
+            self.running = False
+            messagebox.showinfo(
+                "Done", f"Goal reached!  Cost: {self.metrics['cost'].get()} steps")
+            return
+
+        # Draw agent at new position
+        if self.grid_obj.grid[ar][ac] not in (START, GOAL):
+            self.grid_obj.draw_cell(ar, ac, COLORS["agent"])
+
+        # Try to spawn an obstacle; re-plan if path is blocked
+        if self._spawn_obstacle():
+            self._replan(self.agent_pos)
+            return
+
+        self.anim_id = self.root.after(ANIM_MS * 4, self._move_agent)
+
+    def _spawn_obstacle(self):
+        """
+        With probability SPAWN_CHANCE, place a new wall on a random empty cell.
+        Returns True if the new wall falls on the agent's remaining path.
+        Returns False otherwise (no re-planning needed).
+        """
+        if random.random() > SPAWN_CHANCE:
+            return False
+
+        # Collect all currently empty cells
+        empties = [
+            (r, c)
+            for r in range(self.grid_obj.rows)
+            for c in range(self.grid_obj.cols)
+            if self.grid_obj.grid[r][c] == EMPTY
+        ]
+        if not empties:
+            return False
+
+        # Pick one at random and turn it into a wall
+        tr, tc = random.choice(empties)
+        self.grid_obj.grid[tr][tc] = WALL
+        self.grid_obj.draw_cell(tr, tc)          # show new wall immediately
+
+        # Check if this wall is on the remaining planned path
+        return (tr, tc) in self.cur_path[self.path_idx:]
+
+    def _replan(self, new_start):
+        """
+        Re-run the selected algorithm from the agent's current position.
+        Called immediately when a dynamic obstacle blocks the path.
+        """
+        # Import here to avoid circular imports at module level
+        from algorithms import astar, greedy_bfs
+
+        h_fn = self.h_fn_getter()    # get the currently selected heuristic
+
+        if self.algo_var.get() == "A*":
+            path, _, _ = astar(
+                self.grid_obj.grid, new_start, self.grid_obj.goal, h_fn)
+        else:
+            path, _, _ = greedy_bfs(
+                self.grid_obj.grid, new_start, self.grid_obj.goal, h_fn)
+
+        if path is None:
+            self.running = False
+            messagebox.showwarning("Trapped", "No path from current position.")
+            return
+
+        # Update path and redraw it
+        self.cur_path = path
+        self.path_idx = 1                           # 0 is current cell
+        self.metrics["cost"].set(str(len(path) - 1))
+
+        for r, c in path[1:]:
+            if self.grid_obj.grid[r][c] not in (START, GOAL, WALL):
+                self.grid_obj.draw_cell(r, c, COLORS["path"])
+
+        # Resume agent movement
+        self.anim_id = self.root.after(ANIM_MS * 4, self._move_agent)
+
+
+
+
 
 
 
