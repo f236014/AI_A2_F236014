@@ -30,3 +30,40 @@ COLORS = {
     "sidebar"    : "#e8e8e8",   # sidebar panel background
 }
 
+# ─────────────────────────────────────────────────────────────
+# Heuristic functions estimate the remaining distance from a
+#   (A* or Greedy BFS) was chosen.
+# ─────────────────────────────────────────────────────────────
+
+import math
+
+
+def manhattan(a, b):
+    """
+    Manhattan Distance  =  |row_a - row_b| + |col_a - col_b|
+
+    Think of it as the number of blocks walked on a city grid
+    (no diagonals).  Fast to compute and works perfectly for
+    4-directional grid movement.
+
+    Example:
+        a = (0, 0),  b = (3, 4)
+        manhattan(a, b) = |0-3| + |0-4| = 3 + 4 = 7
+    """
+    return abs(a[0] - b[0]) + abs(a[1] - b[1])
+
+
+def euclidean(a, b):
+    """
+    Euclidean Distance  =  sqrt( (row_a-row_b)^2 + (col_a-col_b)^2 )
+
+    The straight-line geometric distance between two points.
+    Slightly more accurate than Manhattan but a bit slower
+    to compute due to the square root.
+
+    Example:
+        a = (0, 0),  b = (3, 4)
+        euclidean(a, b) = sqrt(9 + 16) = sqrt(25) = 5.0
+    """
+    return math.sqrt((a[0] - b[0]) ** 2 + (a[1] - b[1]) ** 2)
+
