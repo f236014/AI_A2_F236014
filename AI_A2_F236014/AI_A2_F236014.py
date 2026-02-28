@@ -1,102 +1,61 @@
-﻿# ─────────────────────────────────────────────────────────────
-# All configuration values in one place.
+﻿import tkinter as tk
+from tkinter import messagebox, ttk
+import heapq
+import math
+import time
+import random
+
+# ─────────────────────────────────────────────────────────────
+#  CONSTANTS
 # ─────────────────────────────────────────────────────────────
 
-CELL_SIZE    = 26    # pixel width/height of each grid square
-DEFAULT_ROWS = 20    # starting number of rows
-DEFAULT_COLS = 28    # starting number of columns
-ANIM_MS      = 30    # milliseconds between animation frames (lower = faster)
-SPAWN_CHANCE = 0.04  # 4% probability per agent step to spawn a new obstacle
+CELL_SIZE    = 26
+DEFAULT_ROWS = 20
+DEFAULT_COLS = 28
+ANIM_MS      = 30
+SPAWN_CHANCE = 0.04
 
+EMPTY = 0
+WALL  = 1
+START = 2
+GOAL  = 3
 
-EMPTY = 0   # passable cell
-WALL  = 1   # blocked cell
-START = 2   # agent start position
-GOAL  = 3   # target position
-
-
-# Plain flat colours — easy to read on any monitor.
 COLORS = {
-    EMPTY        : "#ffffff",   # white  – open cell
-    WALL         : "#2d2d2d",   # dark grey – wall
-    START        : "#27ae60",   # green  – start marker
-    GOAL         : "#e74c3c",   # red    – goal marker
-    "frontier"   : "#f39c12",   # orange – node is in the priority queue
-    "visited"    : "#3498db",   # blue   – node has been expanded
-    "path"       : "#2ecc71",   # bright green – final solution path
-    "agent"      : "#9b59b6",   # purple – agent moving in dynamic mode
-    "grid"       : "#cccccc",   # light grey – cell border lines
-    "bg"         : "#f0f0f0",   # window background
-    "sidebar"    : "#e8e8e8",   # sidebar panel background
+    EMPTY      : "#ffffff",
+    WALL       : "#2d2d2d",
+    START      : "#27ae60",
+    GOAL       : "#e74c3c",
+    "frontier" : "#f39c12",
+    "visited"  : "#3498db",
+    "path"     : "#2ecc71",
+    "agent"    : "#9b59b6",
+    "grid"     : "#cccccc",
+    "bg"       : "#f0f2f5",
+    "sidebar"  : "#ffffff",
 }
 
 # ─────────────────────────────────────────────────────────────
-# Heuristic functions estimate the remaining distance from a
-#   (A* or Greedy BFS) was chosen.
+#  HEURISTIC FUNCTIONS
 # ─────────────────────────────────────────────────────────────
-
-import math
-
 
 def manhattan(a, b):
-    """
-    Manhattan Distance  =  |row_a - row_b| + |col_a - col_b|
-
-    Think of it as the number of blocks walked on a city grid
-    (no diagonals).  Fast to compute and works perfectly for
-    4-directional grid movement.
-
-    Example:
-        a = (0, 0),  b = (3, 4)
-        manhattan(a, b) = |0-3| + |0-4| = 3 + 4 = 7
-    """
     return abs(a[0] - b[0]) + abs(a[1] - b[1])
 
-
 def euclidean(a, b):
-    """
-    Euclidean Distance  =  sqrt( (row_a-row_b)^2 + (col_a-col_b)^2 )
-
-    The straight-line geometric distance between two points.
-    Slightly more accurate than Manhattan but a bit slower
-    to compute due to the square root.
-
-    Example:
-        a = (0, 0),  b = (3, 4)
-        euclidean(a, b) = sqrt(9 + 16) = sqrt(25) = 5.0
-    """
-    return math.sqrt((a[0] - b[0]) ** 2 + (a[1] - b[1]) ** 2)
-
+    return math.sqrt((a[0]-b[0])**2 + (a[1]-b[1])**2)
 
 # ─────────────────────────────────────────────────────────────
-# Contains the two search algorithms A* and Greedy Best-First Search.
+#  SHARED HELPERS
 # ─────────────────────────────────────────────────────────────
-
-import heapq                    # min-heap priority queue
-from constants import WALL      # cell type code for walls
-
-
-# ── Shared helper: valid neighbours of a grid cell ───────────
 
 def get_neighbors(node, rows, cols, grid):
-    """
-    Yield the Up / Down / Left / Right neighbours of 'node'
-    that are inside the grid AND are not walls.
-    """
     r, c = node
-    for dr, dc in [(-1, 0), (1, 0), (0, -1), (0, 1)]:
-        nr, nc = r + dr, c + dc
+    for dr, dc in [(-1,0),(1,0),(0,-1),(0,1)]:
+        nr, nc = r+dr, c+dc
         if 0 <= nr < rows and 0 <= nc < cols and grid[nr][nc] != WALL:
             yield (nr, nc)
 
-
-# ── Shared helper: reconstruct path from came_from map ───────
-
 def build_path(came_from, goal):
-    """
-    Walk came_from backwards from goal → start, then reverse.
-    Returns a list of (row, col) tuples: [start, ..., goal].
-    """
     path, cur = [], goal
     while cur is not None:
         path.append(cur)
@@ -104,738 +63,341 @@ def build_path(came_from, goal):
     path.reverse()
     return path
 
-
-# ═════════════════════════════════════════════════════════════
+# ─────────────────────────────────────────────────────────────
 #  ALGORITHM 1 — GREEDY BEST-FIRST SEARCH
-#    Priority = h(n)  
-# ═════════════════════════════════════════════════════════════
+# ─────────────────────────────────────────────────────────────
 
 def greedy_bfs(grid, start, goal, h_fn):
-    """
-    Parameters
-    ----------
-    grid   : 2-D list of cell codes (EMPTY / WALL / START / GOAL)
-    start  : (row, col) tuple
-    goal   : (row, col) tuple
-    h_fn   : heuristic function  e.g. manhattan or euclidean
-
-    Returns
-    -------
-    path           : list of (row,col) from start to goal, or None
-    visited_order  : order in which nodes were expanded (for animation)
-    frontier_snaps : snapshots of frontier at each step  (for animation)
-    """
     rows, cols = len(grid), len(grid[0])
-
-    # Each entry in the priority queue: (h_value, node)
     pq = [(h_fn(start, goal), start)]
-
-    came_from = {start: None}   # maps node → parent node
-    visited   = {start}         # strict visited set
-
-    visited_order  = []         # for animation
-    frontier_snaps = []         # for animation
+    came_from = {start: None}
+    visited   = {start}
+    v_order   = []
+    f_snaps   = []
 
     while pq:
-        # ── Pop the node with the LOWEST h(n) ────────────────
         _, cur = heapq.heappop(pq)
-        visited_order.append(cur)
-
+        v_order.append(cur)
         if cur == goal:
-            return build_path(came_from, goal), visited_order, frontier_snaps
-
+            return build_path(came_from, goal), v_order, f_snaps
         for nb in get_neighbors(cur, rows, cols, grid):
             if nb not in visited:
                 visited.add(nb)
                 came_from[nb] = cur
                 heapq.heappush(pq, (h_fn(nb, goal), nb))
+        f_snaps.append([x[1] for x in pq])
 
-        # Save a frontier snapshot for the animator
-        frontier_snaps.append([x[1] for x in pq])
+    return None, v_order, f_snaps
 
-    return None, visited_order, frontier_snaps   # no path exists
-
-
-# ═════════════════════════════════════════════════════════════
+# ─────────────────────────────────────────────────────────────
 #  ALGORITHM 2 — A* SEARCH
-#    f(n) = g(n) + h(n)
-# ═════════════════════════════════════════════════════════════
+# ─────────────────────────────────────────────────────────────
 
 def astar(grid, start, goal, h_fn):
-    """
-    Parameters
-    ----------
-    grid   : 2-D list of cell codes
-    start  : (row, col) tuple
-    goal   : (row, col) tuple
-    h_fn   : heuristic function  e.g. manhattan or euclidean
-
-    Returns
-    -------
-    path           : optimal list of (row,col), or None
-    visited_order  : expansion order  (for animation)
-    frontier_snaps : frontier snapshots (for animation)
-    """
     rows, cols = len(grid), len(grid[0])
-
-    g = {start: 0}              # best known g-cost to each node
-
-    # Each entry: (f_value, g_value, node)
-    # g_value is stored as a tiebreaker — prefer nodes with higher g
-   
+    g = {start: 0}
     pq = [(h_fn(start, goal), 0, start)]
-
     came_from = {start: None}
-    expanded  = set()           # nodes fully processed
-
-    visited_order  = []
-    frontier_snaps = []
+    expanded  = set()
+    v_order   = []
+    f_snaps   = []
 
     while pq:
-        # ── Pop the node with the LOWEST f = g + h ───────────
         _, g_cur, cur = heapq.heappop(pq)
-
         if cur in expanded:
-            # A cheaper path to this node was already processed — skip
             continue
-
         expanded.add(cur)
-        visited_order.append(cur)
-
+        v_order.append(cur)
         if cur == goal:
-            return build_path(came_from, goal), visited_order, frontier_snaps
-
+            return build_path(came_from, goal), v_order, f_snaps
         for nb in get_neighbors(cur, rows, cols, grid):
-            new_g = g[cur] + 1          # uniform step cost = 1
-
-            # Only update if we found a cheaper route to this neighbour
+            new_g = g[cur] + 1
             if nb not in g or new_g < g[nb]:
-                g[nb]         = new_g
+                g[nb] = new_g
                 came_from[nb] = cur
-                f             = new_g + h_fn(nb, goal)
-                heapq.heappush(pq, (f, new_g, nb))
+                heapq.heappush(pq, (new_g + h_fn(nb, goal), new_g, nb))
+        f_snaps.append([x[2] for x in pq])
 
-        frontier_snaps.append([x[2] for x in pq])
-
-    return None, visited_order, frontier_snaps   # no path exists
-
+    return None, v_order, f_snaps
 
 # ─────────────────────────────────────────────────────────────
-# Manages the 2-D grid array and the tkinter canvas that
-# draws it.  Also handles all mouse input.
+#  GUI APPLICATION
 # ─────────────────────────────────────────────────────────────
-
-import random
-import tkinter as tk
-from constants import (
-    EMPTY, WALL, START, GOAL,
-    CELL_SIZE, COLORS
-)
-
-
-class Grid:
-    """
-    Holds the grid data and owns the tkinter Canvas widget.
-
-    Attributes
-    ----------
-    rows, cols : grid dimensions
-    grid       : 2-D list of cell codes (EMPTY / WALL / START / GOAL)
-    start      : (row, col) of the start cell
-    goal       : (row, col) of the goal cell
-    canvas     : the tkinter Canvas this grid is drawn on
-    mode_var   : tk.StringVar controlled by the draw-mode radio buttons
-    """
-
-    def __init__(self, parent_frame, rows, cols, mode_var):
-        """
-        Parameters
-        ----------
-        parent_frame : tkinter frame to place the canvas inside
-        rows, cols   : initial grid size
-        mode_var     : tk.StringVar — value is "wall"/"erase"/"start"/"goal"
-        """
-        self.rows     = rows
-        self.cols     = cols
-        self.mode_var = mode_var
-        self.grid     = []
-        self.start    = (0, 0)
-        self.goal     = (rows - 1, cols - 1)
-
-        # Create the canvas
-        self.canvas = tk.Canvas(
-            parent_frame,
-            width             = cols * CELL_SIZE,
-            height            = rows * CELL_SIZE,
-            bg                = COLORS[EMPTY],
-            highlightthickness = 0
-        )
-        self.canvas.pack(anchor="nw")
-
-        # Bind mouse events
-        self.canvas.bind("<Button-1>",  self._on_click)     # left-click
-        self.canvas.bind("<B1-Motion>", self._on_drag)      # left-click drag
-        self.canvas.bind("<Button-3>",  self._on_rclick)    # right-click = erase
-
-        self.reset()
-
-    # ── Grid initialisation ──────
-
-    def reset(self):
-        """Clear everything and place start (top-left) and goal (bottom-right)."""
-        self.grid  = [[EMPTY] * self.cols for _ in range(self.rows)]
-        self.start = (0, 0)
-        self.goal  = (self.rows - 1, self.cols - 1)
-        self.grid[0][0]                         = START
-        self.grid[self.rows - 1][self.cols - 1] = GOAL
-        self.redraw()
-
-    def resize(self, rows, cols):
-        """Change grid dimensions and reset."""
-        self.rows = rows
-        self.cols = cols
-        self.canvas.config(width=cols * CELL_SIZE, height=rows * CELL_SIZE)
-        self.reset()
-
-    def random_map(self, density):
-        """
-        Fill grid with random walls.
-
-        Parameters
-        ----------
-        density : float 0.0–1.0 — fraction of cells that become walls
-        """
-        self.reset()
-        for r in range(self.rows):
-            for c in range(self.cols):
-                if (r, c) not in (self.start, self.goal):
-                    if random.random() < density:
-                        self.grid[r][c] = WALL
-        self.redraw()
-
-    # ── Drawing ───────────────────────────────────────────────
-
-    def redraw(self):
-        """Redraw every cell from scratch."""
-        self.canvas.delete("all")
-        for r in range(self.rows):
-            for c in range(self.cols):
-                self.draw_cell(r, c)
-
-    def draw_cell(self, r, c, override=None):
-        """
-        Draw a single cell rectangle.
-
-        Parameters
-        ----------
-        r, c     : grid position
-        override : optional hex colour string — lets the animator
-                   colour cells without changing grid data
-        """
-        x1, y1 = c * CELL_SIZE, r * CELL_SIZE
-        color   = override if override else COLORS[self.grid[r][c]]
-        self.canvas.create_rectangle(
-            x1, y1,
-            x1 + CELL_SIZE, y1 + CELL_SIZE,
-            fill    = color,
-            outline = COLORS["grid"],
-            width   = 1
-        )
-
-    def refresh_all_cells(self):
-        """Redraw every cell from grid data (clears animation colours)."""
-        for r in range(self.rows):
-            for c in range(self.cols):
-                self.draw_cell(r, c)
-
-    # ── Mouse input ─────────────
-
-    def _pixel_to_cell(self, event):
-        """Convert a pixel (x, y) mouse position to (row, col)."""
-        col = max(0, min(event.x // CELL_SIZE, self.cols - 1))
-        row = max(0, min(event.y // CELL_SIZE, self.rows - 1))
-        return row, col
-
-    def _on_click(self, event):
-        self._apply_draw(*self._pixel_to_cell(event))
-
-    def _on_drag(self, event):
-        self._apply_draw(*self._pixel_to_cell(event))
-
-    def _on_rclick(self, event):
-        """Right-click always erases (except start and goal cells)."""
-        r, c = self._pixel_to_cell(event)
-        if self.grid[r][c] not in (START, GOAL):
-            self.grid[r][c] = EMPTY
-            self.draw_cell(r, c)
-
-    def _apply_draw(self, r, c):
-        """
-        Apply the currently selected draw mode to cell (r, c).
-        mode_var is set by the Draw Mode radio buttons in the sidebar.
-        """
-        mode = self.mode_var.get()
-        cell = self.grid[r][c]
-
-        if mode == "wall":
-            if cell in (START, GOAL): return    # never overwrite start/goal
-            self.grid[r][c] = WALL
-            self.draw_cell(r, c)
-
-        elif mode == "erase":
-            if cell in (START, GOAL): return
-            self.grid[r][c] = EMPTY
-            self.draw_cell(r, c)
-
-        elif mode == "start":
-            # remove the old start marker
-            sr, sc = self.start
-            self.grid[sr][sc] = EMPTY
-            self.draw_cell(sr, sc)
-            # place new start
-            self.start        = (r, c)
-            self.grid[r][c]   = START
-            self.draw_cell(r, c)
-
-        elif mode == "goal":
-            # remove the old goal marker
-            gr, gc = self.goal
-            self.grid[gr][gc] = EMPTY
-            self.draw_cell(gr, gc)
-            # place new goal
-            self.goal         = (r, c)
-            self.grid[r][c]   = GOAL
-            self.draw_cell(r, c)
-
-    
-# ─────────────────────────────────────────────────────────────
-# Handles two phases of animation
-#
-#   Phase 1 — _animate_search()
-#   Phase 2 — _move_agent()  
-#
-# Uses tkinter's root.after() for non-blocking animation
-# so the GUI stays responsive during the search.
-# ─────────────────────────────────────────────────────────────
-
-import random
-from tkinter import messagebox
-from constants import (
-    EMPTY, WALL, START, GOAL,
-    ANIM_MS, SPAWN_CHANCE, COLORS
-)
-
-
-class Animator:
-    """
-    Drives the step-by-step search animation and dynamic agent movement.
-
-    Parameters
-    ----------
-    root       : tkinter root window (needed for root.after())
-    grid_obj   : Grid instance (owns grid data + canvas drawing)
-    algo_var   : tk.StringVar — "A*" or "Greedy BFS"
-    h_fn_getter: callable that returns the current heuristic function
-    metrics    : dict with keys "nodes", "cost", "time" (tk.StringVar)
-    """
-
-    def __init__(self, root, grid_obj, algo_var, h_fn_getter, metrics):
-        self.root        = root
-        self.grid_obj    = grid_obj
-        self.algo_var    = algo_var
-        self.h_fn_getter = h_fn_getter
-        self.metrics     = metrics
-
-        self.running   = False   # True while animation is active
-        self.anim_id   = None    # ID from root.after() — lets us cancel
-
-        # Agent state (used only in dynamic mode)
-        self.agent_pos = None
-        self.cur_path  = []
-        self.path_idx  = 0
-
-    # ── Public control methods ────────────────────────────────
-
-    def stop(self):
-        """Cancel any running animation immediately."""
-        self.running = False
-        if self.anim_id:
-            self.root.after_cancel(self.anim_id)
-            self.anim_id = None
-
-    def run(self, path, visited_order, frontier_snaps, dynamic_mode):
-        """
-        Start the animation for a completed search.
-
-        Parameters
-        ----------
-        path           : solution path (list of (row,col)), or None
-        visited_order  : nodes in the order they were expanded
-        frontier_snaps : frontier state at each expansion step
-        dynamic_mode   : bool — if True, move the agent after drawing path
-        """
-        self.running = True
-
-        # Store path so the agent can follow it in dynamic mode
-        self.cur_path  = path if path else []
-        self.agent_pos = self.grid_obj.start
-        self.path_idx  = 0
-
-        self._animate_search(visited_order, frontier_snaps, path,
-                              dynamic_mode, step=0)
-
-    # ── Phase 1: animate the search expansion ─────────────────
-
-    def _animate_search(self, visited_order, frontier_snaps, path,
-                        dynamic_mode, step):
-        """
-        Reveal nodes one at a time.
-        Uses root.after() so the window stays responsive.
-        """
-        if not self.running:
-            return
-
-        if step < len(visited_order):
-            # Colour the newly expanded node blue
-            r, c = visited_order[step]
-            if self.grid_obj.grid[r][c] not in (START, GOAL):
-                self.grid_obj.draw_cell(r, c, COLORS["visited"])
-
-            # Colour frontier (queued) nodes orange
-            if step < len(frontier_snaps):
-                for fr, fc in frontier_snaps[step]:
-                    if self.grid_obj.grid[fr][fc] not in (START, GOAL, WALL):
-                        self.grid_obj.draw_cell(fr, fc, COLORS["frontier"])
-
-            # Schedule next frame
-            self.anim_id = self.root.after(
-                ANIM_MS,
-                lambda: self._animate_search(
-                    visited_order, frontier_snaps, path, dynamic_mode, step + 1)
-            )
-
-        else:
-            # ── Draw the solution path in green
-            if path:
-                for r, c in path:
-                    if self.grid_obj.grid[r][c] not in (START, GOAL):
-                        self.grid_obj.draw_cell(r, c, COLORS["path"])
-
-            if dynamic_mode and path:
-                # Begin agent movement
-                self.path_idx = 0
-                self.anim_id  = self.root.after(ANIM_MS * 3, self._move_agent)
-            else:
-                self.running = False
-
-    # ── Phase 2: move the agent (dynamic mode only)
-
-    def _move_agent(self):
-        """
-        Advance the agent one cell along cur_path.
-        After each step:
-          - Try to spawn a random wall (_spawn_obstacle).
-          - If the wall blocks the remaining path, re-plan.
-        """
-        if not self.running:
-            return
-
-        # Erase the agent marker from the previous cell
-        if self.agent_pos:
-            pr, pc = self.agent_pos
-            if self.grid_obj.grid[pr][pc] not in (START, GOAL):
-                self.grid_obj.draw_cell(pr, pc, COLORS["path"])
-
-        # Check if the agent has reached the end of the path
-        if self.path_idx >= len(self.cur_path):
-            self.running = False
-            messagebox.showinfo(
-                "Done", f"Goal reached!  Cost: {self.metrics['cost'].get()} steps")
-            return
-
-        # Move to next cell
-        self.agent_pos  = self.cur_path[self.path_idx]
-        self.path_idx  += 1
-        ar, ac = self.agent_pos
-
-        # Stop if we reached the goal cell
-        if (ar, ac) == self.grid_obj.goal:
-            self.grid_obj.draw_cell(ar, ac, COLORS[GOAL])
-            self.running = False
-            messagebox.showinfo(
-                "Done", f"Goal reached!  Cost: {self.metrics['cost'].get()} steps")
-            return
-
-        # Draw agent at new position
-        if self.grid_obj.grid[ar][ac] not in (START, GOAL):
-            self.grid_obj.draw_cell(ar, ac, COLORS["agent"])
-
-        # Try to spawn an obstacle; re-plan if path is blocked
-        if self._spawn_obstacle():
-            self._replan(self.agent_pos)
-            return
-
-        self.anim_id = self.root.after(ANIM_MS * 4, self._move_agent)
-
-    def _spawn_obstacle(self):
-        """
-        With probability SPAWN_CHANCE, place a new wall on a random empty cell.
-        Returns True if the new wall falls on the agent's remaining path.
-        Returns False otherwise (no re-planning needed).
-        """
-        if random.random() > SPAWN_CHANCE:
-            return False
-
-        # Collect all currently empty cells
-        empties = [
-            (r, c)
-            for r in range(self.grid_obj.rows)
-            for c in range(self.grid_obj.cols)
-            if self.grid_obj.grid[r][c] == EMPTY
-        ]
-        if not empties:
-            return False
-
-        # Pick one at random and turn it into a wall
-        tr, tc = random.choice(empties)
-        self.grid_obj.grid[tr][tc] = WALL
-        self.grid_obj.draw_cell(tr, tc)          # show new wall immediately
-
-        # Check if this wall is on the remaining planned path
-        return (tr, tc) in self.cur_path[self.path_idx:]
-
-    def _replan(self, new_start):
-        """
-        Re-run the selected algorithm from the agent's current position.
-        Called immediately when a dynamic obstacle blocks the path.
-        """
-        # Import here to avoid circular imports at module level
-        from algorithms import astar, greedy_bfs
-
-        h_fn = self.h_fn_getter()    # get the currently selected heuristic
-
-        if self.algo_var.get() == "A*":
-            path, _, _ = astar(
-                self.grid_obj.grid, new_start, self.grid_obj.goal, h_fn)
-        else:
-            path, _, _ = greedy_bfs(
-                self.grid_obj.grid, new_start, self.grid_obj.goal, h_fn)
-
-        if path is None:
-            self.running = False
-            messagebox.showwarning("Trapped", "No path from current position.")
-            return
-
-        # Update path and redraw it
-        self.cur_path = path
-        self.path_idx = 1                           # 0 is current cell
-        self.metrics["cost"].set(str(len(path) - 1))
-
-        for r, c in path[1:]:
-            if self.grid_obj.grid[r][c] not in (START, GOAL, WALL):
-                self.grid_obj.draw_cell(r, c, COLORS["path"])
-
-        # Resume agent movement
-        self.anim_id = self.root.after(ANIM_MS * 4, self._move_agent)
-
-
-
-       
-# ─────────────────────────────────────────────────────────────
-# Entry point 
-# FILE OVERVIEW:
-#   constants.py  — colours, sizes, cell codes
-#   heuristics.py — manhattan() and euclidean()
-#   algorithms.py — greedy_bfs() and astar()
-#   grid.py       — Grid class (canvas + mouse drawing)
-#   animator.py   — Animator class (search + agent animation)
-#   main.py       — App class (sidebar GUI) + entry point  ← YOU ARE HERE
-# ─────────────────────────────────────────────────────────────
-
-import tkinter as tk
-from tkinter import messagebox
-import time
-
-from constants  import EMPTY, WALL, START, GOAL, DEFAULT_ROWS, DEFAULT_COLS, COLORS
-from heuristics import manhattan, euclidean
-from algorithms import astar, greedy_bfs
-from grid       import Grid
-from animator   import Animator
-
 
 class App:
-    """
-    Main application window.
-    Builds the sidebar with all controls and connects them to
-    the Grid and Animator objects.
-    """
-
     def __init__(self, root):
         self.root = root
-        root.title("AI 2002 – Q6 | Dynamic Pathfinding Agent")
-        root.configure(bg=COLORS["bg"])
-        root.resizable(True, True)
+        self.root.title("AI 2002 – Q6  |  Dynamic Pathfinding Agent")
+        self.root.configure(bg=COLORS["bg"])
+        self.root.resizable(True, True)
 
-        # ── Control variables (read by sidebar widgets) ───
-        
+        self.rows  = DEFAULT_ROWS
+        self.cols  = DEFAULT_COLS
+        self.grid  = []
+        self.start = (0, 0)
+        self.goal  = (self.rows-1, self.cols-1)
+
         self.algo_var = tk.StringVar(value="A*")
         self.h_var    = tk.StringVar(value="Manhattan")
         self.mode_var = tk.StringVar(value="wall")
         self.dyn_var  = tk.BooleanVar(value=False)
 
-        # Metric display (shown in sidebar, updated after each search)
-        self.m_nodes = tk.StringVar(value="0")
-        self.m_cost  = tk.StringVar(value="0")
-        self.m_time  = tk.StringVar(value="0.00 ms")
-        self.metrics = {"nodes": self.m_nodes,
-                        "cost" : self.m_cost,
-                        "time" : self.m_time}
+        self.lbl_nodes = tk.StringVar(value="0")
+        self.lbl_cost  = tk.StringVar(value="0")
+        self.lbl_time  = tk.StringVar(value="0 ms")
 
-        # Build sidebar first so we can reference its frame
-        self._build_sidebar()
+        self._nodes_so_far    = 0
+        self._search_start    = 0.0
+        self._timer_id        = None
+        self._total_path_cost = 0
 
-        # Canvas frame (right of sidebar)
-        cf = tk.Frame(root, bg="#bbbbbb", bd=1, relief=tk.SUNKEN)
-        cf.pack(side=tk.LEFT, fill=tk.BOTH, expand=True, padx=6, pady=6)
+        self.running   = False
+        self.anim_id   = None
+        self.agent_pos = None
+        self.cur_path  = []
+        self.path_idx  = 0
 
-        # Grid object — owns the tkinter Canvas and the 2-D grid data
-        self.grid_obj = Grid(cf, DEFAULT_ROWS, DEFAULT_COLS, self.mode_var)
+        self._build_ui()
+        self._reset_grid()
+        self._redraw()
 
-        # Animator object — drives step-by-step animation and agent movement
-        self.animator = Animator(
-            root        = root,
-            grid_obj    = self.grid_obj,
-            algo_var    = self.algo_var,
-            h_fn_getter = self._get_h,
-            metrics     = self.metrics,
-        )
+    # ══════════════════════════════════════════════════════════
+    #  BUILD UI
+    # ══════════════════════════════════════════════════════════
 
-   
-    #  SIDEBAR CONSTRUCTION
- 
+    def _build_ui(self):
+        # ── Outer layout: sidebar | canvas ────────────────────
+        outer = tk.Frame(self.root, bg=COLORS["bg"])
+        outer.pack(fill=tk.BOTH, expand=True)
 
-    def _build_sidebar(self):
-        SB = COLORS["sidebar"]
+        # ── Sidebar with scrollbar ─────────────────────────────
+        sb_container = tk.Frame(outer, bg=COLORS["bg"])
+        sb_container.pack(side=tk.LEFT, fill=tk.Y, padx=(10, 0), pady=10)
 
-        sb = tk.Frame(self.root, bg=SB, relief=tk.RIDGE, bd=1,
-                      padx=8, pady=8, width=200)
-        sb.pack(side=tk.LEFT, fill=tk.Y)
-        sb.pack_propagate(False)
+        sb_canvas = tk.Canvas(sb_container, bg=COLORS["sidebar"],
+                              highlightthickness=0, width=230)
+        scrollbar = ttk.Scrollbar(sb_container, orient="vertical",
+                                  command=sb_canvas.yview)
+        sb_canvas.configure(yscrollcommand=scrollbar.set)
 
-        # ── Tiny helper functions used only inside this method ──
+        scrollbar.pack(side=tk.RIGHT, fill=tk.Y)
+        sb_canvas.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
 
-        def section(text):
-            tk.Frame(sb, bg="#aaaaaa", height=1).pack(fill=tk.X, pady=(8, 3))
-            tk.Label(sb, text=text, bg=SB, fg="#222222",
-                     font=("Arial", 8, "bold"), anchor="w").pack(fill=tk.X)
+        sb = tk.Frame(sb_canvas, bg=COLORS["sidebar"])
+        sb_window = sb_canvas.create_window((0, 0), window=sb, anchor="nw")
 
-        def radio_group(var, options):
-            """Create a set of radio buttons that all write to the same var."""
-            for val, label in options:
-                tk.Radiobutton(
-                    sb, text=label, variable=var, value=val,
-                    bg=SB, fg="#111111",
-                    activebackground=SB, selectcolor="#cccccc",
-                    font=("Arial", 9), anchor="w"
-                ).pack(fill=tk.X)
+        def _on_frame_configure(e):
+            sb_canvas.configure(scrollregion=sb_canvas.bbox("all"))
+        def _on_canvas_configure(e):
+            sb_canvas.itemconfig(sb_window, width=e.width)
 
-        def btn(text, cmd, bg="#dddddd", fg="#000000"):
-            tk.Button(sb, text=text, command=cmd, bg=bg, fg=fg,
-                      relief=tk.RAISED, font=("Arial", 8, "bold"),
-                      cursor="hand2").pack(fill=tk.X, pady=2)
+        sb.bind("<Configure>", _on_frame_configure)
+        sb_canvas.bind("<Configure>", _on_canvas_configure)
 
-        # Title
-        tk.Label(sb, text="Pathfinding Agent", bg=SB, fg="#111111",
-                 font=("Arial", 11, "bold")).pack(pady=(0, 2))
-        tk.Label(sb, text="AI 2002 – Question 6", bg=SB, fg="#555555",
-                 font=("Arial", 8)).pack(pady=(0, 4))
+        def _on_mousewheel(e):
+            sb_canvas.yview_scroll(int(-1*(e.delta/120)), "units")
+        sb_canvas.bind_all("<MouseWheel>", _on_mousewheel)
 
-        # ── Grid size ──────
-        section("Grid Size")
-        sf = tk.Frame(sb, bg=SB)
-        sf.pack(fill=tk.X, pady=2)
-        for i, (lbl_text, attr) in enumerate([("Rows", "e_rows"),
-                                               ("Cols", "e_cols")]):
-            tk.Label(sf, text=f"{lbl_text}:", bg=SB,
-                     font=("Arial", 8), width=5, anchor="w").grid(
-                         row=i, column=0)
-            e = tk.Entry(sf, width=5, font=("Arial", 8))
-            e.insert(0, str(DEFAULT_ROWS if i == 0 else DEFAULT_COLS))
-            e.grid(row=i, column=1, padx=2, pady=2)
-            setattr(self, attr, e)
-        btn("Apply Size", self._apply_size)
+        # ── Sidebar padding wrapper ────────────────────────────
+        pad = tk.Frame(sb, bg=COLORS["sidebar"])
+        pad.pack(fill=tk.BOTH, expand=True, padx=12, pady=10)
 
-        # ── Algorithm selection ────────
-        # Writes to self.algo_var.
-        # _start() reads this to call astar() or greedy_bfs().
-        section("Algorithm")
-        radio_group(self.algo_var, [
-            ("A*",         "A*  (optimal, slower)"),
-            ("Greedy BFS", "Greedy BFS  (fast, non-optimal)"),
-        ])
+        # ── Helper builders ────────────────────────────────────
+        def section_title(text):
+            tk.Label(pad, text=text.upper(),
+                     bg=COLORS["sidebar"], fg="#888888",
+                     font=("Arial", 7, "bold"),
+                     anchor="w").pack(fill=tk.X, pady=(12, 2))
+            tk.Frame(pad, bg="#e0e0e0", height=1).pack(fill=tk.X)
 
-        # ── Heuristic selection ───────────
-        # Writes to self.h_var.
-        # _get_h() reads this and passes the function into the algorithm.
-        section("Heuristic  h(n)")
-        radio_group(self.h_var, [
-            ("Manhattan", "Manhattan  |dr|+|dc|"),
-            ("Euclidean", "Euclidean  sqrt(dr²+dc²)"),
-        ])
+        def card(inner_fn):
+            """Wrap content in a subtle card frame."""
+            f = tk.Frame(pad, bg="#f7f8fa", relief=tk.FLAT,
+                         highlightbackground="#e0e0e0",
+                         highlightthickness=1)
+            f.pack(fill=tk.X, pady=(4, 2))
+            inner_fn(f)
+            return f
 
-        # ── Draw mode ─────────────────
-        # Writes to self.mode_var.
-        # Grid._apply_draw() reads this on every mouse click.
-        section("Draw Mode  (click grid)")
-        radio_group(self.mode_var, [
-            ("wall",  "Draw Wall"),
-            ("erase", "Erase"),
-            ("start", "Set Start"),
-            ("goal",  "Set Goal"),
-        ])
+        def radio_group(parent, var, options):
+            for val, txt in options:
+                tk.Radiobutton(parent, text=txt, variable=var, value=val,
+                               bg=parent["bg"], fg="#333333",
+                               activebackground=parent["bg"],
+                               selectcolor="#d0e8ff",
+                               font=("Arial", 9), anchor="w",
+                               padx=6).pack(fill=tk.X, pady=1)
 
-        # ── Random map ─────────────────
-        section("Obstacle Density")
-        self.density = tk.IntVar(value=30)
-        tk.Scale(sb, from_=0, to=70, orient=tk.HORIZONTAL,
-                 variable=self.density, bg=SB,
-                 font=("Arial", 7), highlightthickness=0).pack(fill=tk.X)
-        btn("Random Map", self._random_map)
+        def action_btn(text, cmd, bg="#eeeeee", fg="#111111", bold=False):
+            tk.Button(pad, text=text, command=cmd,
+                      bg=bg, fg=fg,
+                      relief=tk.FLAT,
+                      font=("Arial", 9, "bold" if bold else "normal"),
+                      cursor="hand2",
+                      activebackground=bg,
+                      padx=8, pady=5).pack(fill=tk.X, pady=2)
 
-        # ── Dynamic mode ────────────────
-        section("Dynamic Mode")
-        tk.Checkbutton(sb, text="Enable Dynamic Obstacles",
-                       variable=self.dyn_var, bg=SB, fg="#222222",
-                       activebackground=SB,
-                       font=("Arial", 8)).pack(anchor="w")
-        tk.Label(sb,
-                 text="(Walls spawn while agent moves;\nagent re-plans automatically)",
-                 bg=SB, fg="#666666",
-                 font=("Arial", 7), justify=tk.LEFT).pack(anchor="w")
+        # ── Title ──────────────────────────────────────────────
+        tk.Label(pad, text="Pathfinding Agent",
+                 bg=COLORS["sidebar"], fg="#111111",
+                 font=("Arial", 13, "bold"), anchor="w").pack(fill=tk.X)
+        tk.Label(pad, text="AI 2002 – Question 6",
+                 bg=COLORS["sidebar"], fg="#888888",
+                 font=("Arial", 8), anchor="w").pack(fill=tk.X, pady=(0, 4))
 
-        # ── Action buttons ────────────────
-        section("Actions")
-        btn("▶  Start Search", self._start,      bg="#27ae60", fg="#ffffff")
-        btn("⏹  Stop",         self._stop,       bg="#e74c3c", fg="#ffffff")
-        btn("Clear Path",      self._clear_path)
-        btn("Clear All",       self._clear_all)
+        # ── Grid Size ──────────────────────────────────────────
+        section_title("Grid Size")
+        def _grid_size_body(f):
+            inner = tk.Frame(f, bg=f["bg"], padx=8, pady=6)
+            inner.pack(fill=tk.X)
+            for i, (lbl_text, entry_attr, default) in enumerate([
+                ("Rows", "e_rows", str(DEFAULT_ROWS)),
+                ("Cols", "e_cols", str(DEFAULT_COLS)),
+            ]):
+                row = tk.Frame(inner, bg=f["bg"])
+                row.pack(fill=tk.X, pady=2)
+                tk.Label(row, text=lbl_text, bg=f["bg"], fg="#555",
+                         font=("Arial", 8), width=5, anchor="w").pack(side=tk.LEFT)
+                e = tk.Entry(row, width=6, font=("Arial", 9),
+                             relief=tk.SOLID, bd=1)
+                e.insert(0, default)
+                e.pack(side=tk.LEFT, padx=(4, 0))
+                setattr(self, entry_attr, e)
+            tk.Button(inner, text="Apply Size", command=self._apply_size,
+                      bg="#e8e8e8", fg="#222", relief=tk.FLAT,
+                      font=("Arial", 8), cursor="hand2",
+                      padx=6, pady=3).pack(fill=tk.X, pady=(6,0))
+        card(_grid_size_body)
 
-        # ── Metrics ────────────────────────
-        section("Metrics")
-        for label, var in [("Nodes visited:", self.m_nodes),
-                            ("Path cost:",     self.m_cost),
-                            ("Time:",          self.m_time)]:
-            row = tk.Frame(sb, bg=SB)
-            row.pack(fill=tk.X)
-            tk.Label(row, text=label, bg=SB, fg="#555555",
+        # ── Algorithm ─────────────────────────────────────────
+        section_title("Algorithm")
+        def _algo_body(f):
+            radio_group(f, self.algo_var, [
+                ("A*",         "A*  (optimal, slower)"),
+                ("Greedy BFS", "Greedy BFS  (fast, non-optimal)"),
+            ])
+        card(_algo_body)
+
+        # ── Heuristic ─────────────────────────────────────────
+        section_title("Heuristic  h(n)")
+        def _heur_body(f):
+            radio_group(f, self.h_var, [
+                ("Manhattan", "Manhattan  |dr|+|dc|"),
+                ("Euclidean", "Euclidean  √(dr²+dc²)"),
+            ])
+        card(_heur_body)
+
+        # ── Draw Mode ─────────────────────────────────────────
+        section_title("Draw Mode  (click grid)")
+        def _draw_body(f):
+            for val, txt, dot_color in [
+                ("wall",  "Draw Wall",  "#2d2d2d"),
+                ("erase", "Erase",      "#ffffff"),
+                ("start", "Set Start",  "#27ae60"),
+                ("goal",  "Set Goal",   "#e74c3c"),
+            ]:
+                row = tk.Frame(f, bg=f["bg"])
+                row.pack(fill=tk.X, pady=1)
+                tk.Radiobutton(row, text=txt, variable=self.mode_var, value=val,
+                               bg=f["bg"], fg="#333333",
+                               activebackground=f["bg"],
+                               selectcolor="#d0e8ff",
+                               font=("Arial", 9), anchor="w",
+                               padx=6).pack(side=tk.LEFT)
+                tk.Label(row, bg=dot_color, width=2,
+                         relief=tk.SOLID, bd=1).pack(side=tk.RIGHT, padx=6)
+        card(_draw_body)
+
+        # ── Random Map ────────────────────────────────────────
+        section_title("Random Map")
+        def _rand_body(f):
+            inner = tk.Frame(f, bg=f["bg"], padx=8, pady=4)
+            inner.pack(fill=tk.X)
+            self.density = tk.IntVar(value=30)
+            hdr = tk.Frame(inner, bg=f["bg"])
+            hdr.pack(fill=tk.X)
+            tk.Label(hdr, text="Obstacle Density", bg=f["bg"], fg="#555",
                      font=("Arial", 8), anchor="w").pack(side=tk.LEFT)
-            tk.Label(row, textvariable=var, bg=SB, fg="#000000",
-                     font=("Arial", 8, "bold"),
-                     anchor="e").pack(side=tk.RIGHT)
+            self._density_lbl = tk.Label(hdr, text="30%", bg=f["bg"], fg="#3498db",
+                                         font=("Arial", 8, "bold"))
+            self._density_lbl.pack(side=tk.RIGHT)
 
-        # ── Colour legend ────────────────────
-        section("Legend")
-        for color, name in [
+            def _update_density_lbl(val):
+                self._density_lbl.config(text=f"{int(float(val))}%")
+
+            tk.Scale(inner, from_=0, to=70, orient=tk.HORIZONTAL,
+                     variable=self.density, bg=f["bg"],
+                     font=("Arial", 7), highlightthickness=0,
+                     troughcolor="#d0d0d0", sliderrelief=tk.FLAT,
+                     command=_update_density_lbl,
+                     showvalue=False).pack(fill=tk.X, pady=(2,4))
+            tk.Button(inner, text="🎲  Random Map", command=self._random_map,
+                      bg="#e8e8e8", fg="#222", relief=tk.FLAT,
+                      font=("Arial", 8), cursor="hand2",
+                      padx=6, pady=3).pack(fill=tk.X)
+        card(_rand_body)
+
+        # ── Dynamic Mode ──────────────────────────────────────
+        section_title("Dynamic Mode")
+        def _dyn_body(f):
+            inner = tk.Frame(f, bg=f["bg"], padx=8, pady=6)
+            inner.pack(fill=tk.X)
+            tk.Checkbutton(inner, text="Enable Dynamic Obstacles",
+                           variable=self.dyn_var, bg=f["bg"],
+                           fg="#333333", activebackground=f["bg"],
+                           font=("Arial", 9), anchor="w").pack(anchor="w")
+            tk.Label(inner,
+                     text="Obstacles spawn mid-run;\nagent re-plans automatically.",
+                     bg=f["bg"], fg="#999999",
+                     font=("Arial", 7), justify=tk.LEFT).pack(anchor="w", pady=(2,0))
+        card(_dyn_body)
+
+        # ── Actions ───────────────────────────────────────────
+        section_title("Actions")
+        action_btn("▶  Start Search", self._start,   bg="#27ae60", fg="#ffffff", bold=True)
+        action_btn("⏹  Stop",         self._stop,    bg="#e74c3c", fg="#ffffff")
+        action_btn("↺  Clear Path",   self._clear_path)
+        action_btn("✕  Clear All",    self._clear_all)
+
+        # ── Metrics Dashboard ─────────────────────────────────
+        section_title("Real-Time Metrics")
+        dash = tk.Frame(pad, bg="#1a252f", relief=tk.FLAT,
+                        highlightbackground="#0d1b24",
+                        highlightthickness=1)
+        dash.pack(fill=tk.X, pady=(4, 2))
+
+        metrics = [
+            ("Nodes Visited", self.lbl_nodes, "#f39c12", "⬡"),
+            ("Path Cost",     self.lbl_cost,  "#2ecc71", "↗"),
+            ("Exec Time",     self.lbl_time,  "#3498db", "⏱"),
+        ]
+        for i, (label_text, var, val_color, icon) in enumerate(metrics):
+            row_f = tk.Frame(dash, bg="#1a252f")
+            row_f.pack(fill=tk.X, padx=10, pady=(8 if i == 0 else 4, 4))
+
+            # icon + label row
+            top = tk.Frame(row_f, bg="#1a252f")
+            top.pack(fill=tk.X)
+            tk.Label(top, text=icon, bg="#1a252f", fg=val_color,
+                     font=("Arial", 9)).pack(side=tk.LEFT)
+            tk.Label(top, text=f"  {label_text}",
+                     bg="#1a252f", fg="#7f8c8d",
+                     font=("Arial", 7, "bold")).pack(side=tk.LEFT)
+
+            # value
+            tk.Label(row_f, textvariable=var,
+                     bg="#1a252f", fg=val_color,
+                     font=("Arial", 16, "bold"),
+                     anchor="w").pack(anchor="w")
+
+            if i < len(metrics) - 1:
+                tk.Frame(dash, bg="#2c3e50", height=1).pack(fill=tk.X, padx=10)
+
+        tk.Frame(dash, height=6, bg="#1a252f").pack()  # bottom padding
+
+        # ── Legend ────────────────────────────────────────────
+        section_title("Legend")
+        legend_items = [
             (COLORS[START],      "Start"),
             (COLORS[GOAL],       "Goal"),
             (COLORS[WALL],       "Wall"),
@@ -843,98 +405,339 @@ class App:
             (COLORS["visited"],  "Visited"),
             (COLORS["path"],     "Final path"),
             (COLORS["agent"],    "Agent"),
-        ]:
-            row = tk.Frame(sb, bg=SB)
-            row.pack(fill=tk.X, pady=1)
-            tk.Label(row, bg=color, width=2,
-                     relief=tk.SOLID, bd=1).pack(side=tk.LEFT, padx=(0, 5))
-            tk.Label(row, text=name, bg=SB, fg="#222222",
-                     font=("Arial", 7)).pack(side=tk.LEFT)
+        ]
+        legend_frame = tk.Frame(pad, bg="#f7f8fa",
+                                highlightbackground="#e0e0e0",
+                                highlightthickness=1)
+        legend_frame.pack(fill=tk.X, pady=(4, 10))
 
-   
-    #  GRID SIZE
-    
+        for i, (color, name) in enumerate(legend_items):
+            row = tk.Frame(legend_frame, bg="#f7f8fa")
+            row.pack(fill=tk.X, padx=8, pady=2)
+            tk.Label(row, bg=color, width=3,
+                     relief=tk.SOLID, bd=1).pack(side=tk.LEFT, padx=(0,8))
+            tk.Label(row, text=name, bg="#f7f8fa",
+                     fg="#333333", font=("Arial", 8)).pack(side=tk.LEFT, anchor="w")
+
+        # ── Canvas area ────────────────────────────────────────
+        canvas_outer = tk.Frame(outer, bg=COLORS["bg"])
+        canvas_outer.pack(side=tk.LEFT, fill=tk.BOTH, expand=True,
+                          padx=10, pady=10)
+
+        # Canvas header
+        header = tk.Frame(canvas_outer, bg=COLORS["bg"])
+        header.pack(fill=tk.X, pady=(0, 6))
+        tk.Label(header, text="Grid",
+                 bg=COLORS["bg"], fg="#444444",
+                 font=("Arial", 10, "bold")).pack(side=tk.LEFT)
+        tk.Label(header,
+                 text="Left-click: draw  |  Right-click: erase  |  Drag to paint",
+                 bg=COLORS["bg"], fg="#aaaaaa",
+                 font=("Arial", 8)).pack(side=tk.LEFT, padx=12)
+
+        cf = tk.Frame(canvas_outer, bg="#cccccc", bd=1, relief=tk.SOLID)
+        cf.pack(anchor="nw")
+
+        self.canvas = tk.Canvas(cf,
+                                width  = self.cols * CELL_SIZE,
+                                height = self.rows * CELL_SIZE,
+                                bg=COLORS[EMPTY], highlightthickness=0)
+        self.canvas.pack()
+        self.canvas.bind("<Button-1>",  self._click)
+        self.canvas.bind("<B1-Motion>", self._drag)
+        self.canvas.bind("<Button-3>",  self._rclick)
+
+    # ══════════════════════════════════════════════════════════
+    #  GRID
+    # ══════════════════════════════════════════════════════════
+
+    def _reset_grid(self):
+        self.grid  = [[EMPTY]*self.cols for _ in range(self.rows)]
+        self.start = (0, 0)
+        self.goal  = (self.rows-1, self.cols-1)
+        self.grid[0][0]                     = START
+        self.grid[self.rows-1][self.cols-1] = GOAL
 
     def _apply_size(self):
         try:
             r, c = int(self.e_rows.get()), int(self.e_cols.get())
-            if not (3 <= r <= 50 and 3 <= c <= 70):
-                raise ValueError
+            if not (3<=r<=50 and 3<=c<=70): raise ValueError
         except ValueError:
-            messagebox.showerror("Invalid", "Rows: 3–50   Cols: 3–70")
+            messagebox.showerror("Error", "Rows: 3–50   Cols: 3–70")
             return
         self._stop()
-        self.grid_obj.resize(r, c)
+        self.rows, self.cols = r, c
+        self.canvas.config(width=c*CELL_SIZE, height=r*CELL_SIZE)
+        self._reset_grid()
+        self._redraw()
+
+    def _redraw(self):
+        self.canvas.delete("all")
+        for r in range(self.rows):
+            for c in range(self.cols):
+                self._cell(r, c)
+
+    def _cell(self, r, c, override=None):
+        x1, y1 = c*CELL_SIZE, r*CELL_SIZE
+        color   = override if override else COLORS[self.grid[r][c]]
+        self.canvas.create_rectangle(x1, y1, x1+CELL_SIZE, y1+CELL_SIZE,
+                                     fill=color, outline=COLORS["grid"], width=1)
+
+    # ══════════════════════════════════════════════════════════
+    #  MOUSE INPUT
+    # ══════════════════════════════════════════════════════════
+
+    def _to_cell(self, e):
+        return (max(0,min(e.y//CELL_SIZE, self.rows-1)),
+                max(0,min(e.x//CELL_SIZE, self.cols-1)))
+
+    def _click(self, e):
+        if not self.running: self._draw(*self._to_cell(e))
+
+    def _drag(self, e):
+        if not self.running: self._draw(*self._to_cell(e))
+
+    def _rclick(self, e):
+        if self.running: return
+        r, c = self._to_cell(e)
+        if self.grid[r][c] not in (START, GOAL):
+            self.grid[r][c] = EMPTY
+            self._cell(r, c)
+
+    def _draw(self, r, c):
+        mode = self.mode_var.get()
+        cell = self.grid[r][c]
+        if mode == "wall":
+            if cell in (START, GOAL): return
+            self.grid[r][c] = WALL;  self._cell(r, c)
+        elif mode == "erase":
+            if cell in (START, GOAL): return
+            self.grid[r][c] = EMPTY; self._cell(r, c)
+        elif mode == "start":
+            sr, sc = self.start
+            self.grid[sr][sc] = EMPTY; self._cell(sr, sc)
+            self.start = (r, c)
+            self.grid[r][c] = START;   self._cell(r, c)
+        elif mode == "goal":
+            gr, gc = self.goal
+            self.grid[gr][gc] = EMPTY; self._cell(gr, gc)
+            self.goal = (r, c)
+            self.grid[r][c] = GOAL;    self._cell(r, c)
+
+    # ══════════════════════════════════════════════════════════
+    #  RANDOM MAP
+    # ══════════════════════════════════════════════════════════
 
     def _random_map(self):
         self._stop()
-        self.grid_obj.random_map(self.density.get() / 100.0)
+        d = self.density.get() / 100.0
+        self._reset_grid()
+        for r in range(self.rows):
+            for c in range(self.cols):
+                if (r,c) not in (self.start, self.goal):
+                    if random.random() < d:
+                        self.grid[r][c] = WALL
+        self._redraw()
 
     # ══════════════════════════════════════════════════════════
-    #  HEURISTIC GETTER
+    #  LIVE TIMER
+    # ══════════════════════════════════════════════════════════
+
+    def _start_timer(self):
+        self._search_start = time.perf_counter()
+        self._tick_timer()
+
+    def _tick_timer(self):
+        if not self.running:
+            return
+        elapsed_ms = (time.perf_counter() - self._search_start) * 1000
+        self.lbl_time.set(f"{elapsed_ms:.0f} ms")
+        self._timer_id = self.root.after(50, self._tick_timer)
+
+    def _stop_timer(self):
+        if self._timer_id:
+            self.root.after_cancel(self._timer_id)
+            self._timer_id = None
+        elapsed_ms = (time.perf_counter() - self._search_start) * 1000
+        self.lbl_time.set(f"{elapsed_ms:.0f} ms")
+
+    # ══════════════════════════════════════════════════════════
+    #  SEARCH
     # ══════════════════════════════════════════════════════════
 
     def _get_h(self):
-        """Return the heuristic function matching the current radio selection."""
         return manhattan if self.h_var.get() == "Manhattan" else euclidean
-
-    # ══════════════════════════════════════════════════════════
-    #  START SEARCH
-    # ══════════════════════════════════════════════════════════
 
     def _start(self):
         self._stop()
         self._clear_path()
+        h = self._get_h()
 
-        g   = self.grid_obj
-        h   = self._get_h()
+        self._nodes_so_far = 0
+        self.lbl_nodes.set("0")
+        self.lbl_cost.set("—")
+        self.lbl_time.set("0 ms")
 
-        t0 = time.perf_counter()
-
-        # ── CALL THE SELECTED ALGORITHM ───────────────────────
         if self.algo_var.get() == "A*":
-            path, v_order, f_snaps = astar(g.grid, g.start, g.goal, h)
+            path, v_order, f_snaps = astar(self.grid, self.start, self.goal, h)
         else:
-            path, v_order, f_snaps = greedy_bfs(g.grid, g.start, g.goal, h)
-        # ─────────────────────────────────────────────────────
-
-        ms = (time.perf_counter() - t0) * 1000
-        self.m_nodes.set(str(len(v_order)))
-        self.m_time.set(f"{ms:.2f} ms")
+            path, v_order, f_snaps = greedy_bfs(self.grid, self.start, self.goal, h)
 
         if path is None:
-            self.m_cost.set("—")
-            messagebox.showwarning("No Path",
-                                   "Goal is unreachable.\nTry removing some walls.")
+            self.lbl_nodes.set(str(len(v_order)))
+            self.lbl_cost.set("No path")
+            self.lbl_time.set("—")
+            messagebox.showwarning("No Path", "Goal unreachable. Remove some walls.")
             return
 
-        self.m_cost.set(str(len(path) - 1))
+        self._total_path_cost = len(path) - 1
+        self.cur_path  = path
+        self.agent_pos = self.start
+        self.path_idx  = 0
+        self.running   = True
 
-        # Hand results to the animator
-        self.animator.run(path, v_order, f_snaps,
-                          dynamic_mode=self.dyn_var.get())
+        self._start_timer()
+        self._anim(v_order, f_snaps, path, step=0)
 
     # ══════════════════════════════════════════════════════════
-    #  UTILITY ACTIONS
+    #  ANIMATION
+    # ══════════════════════════════════════════════════════════
+
+    def _anim(self, v_order, f_snaps, path, step):
+        if not self.running:
+            return
+
+        if step < len(v_order):
+            r, c = v_order[step]
+            if self.grid[r][c] not in (START, GOAL):
+                self._cell(r, c, COLORS["visited"])
+
+            if step < len(f_snaps):
+                for fr, fc in f_snaps[step]:
+                    if self.grid[fr][fc] not in (START, GOAL, WALL):
+                        self._cell(fr, fc, COLORS["frontier"])
+
+            self._nodes_so_far += 1
+            self.lbl_nodes.set(str(self._nodes_so_far))
+
+            self.anim_id = self.root.after(
+                ANIM_MS, lambda: self._anim(v_order, f_snaps, path, step+1))
+
+        else:
+            for r, c in path:
+                if self.grid[r][c] not in (START, GOAL):
+                    self._cell(r, c, COLORS["path"])
+
+            self.lbl_cost.set(str(self._total_path_cost))
+
+            if self.dyn_var.get():
+                self.path_idx = 0
+                self.anim_id  = self.root.after(ANIM_MS*3, self._move)
+            else:
+                self.running = False
+                self._stop_timer()
+
+    # ══════════════════════════════════════════════════════════
+    #  AGENT MOVEMENT
+    # ══════════════════════════════════════════════════════════
+
+    def _move(self):
+        if not self.running:
+            return
+
+        if self.agent_pos:
+            pr, pc = self.agent_pos
+            if self.grid[pr][pc] not in (START, GOAL):
+                self._cell(pr, pc, COLORS["path"])
+
+        if self.path_idx >= len(self.cur_path):
+            self.running = False
+            self._stop_timer()
+            messagebox.showinfo("Done", f"Goal reached!  Cost: {self.lbl_cost.get()} steps")
+            return
+
+        self.agent_pos  = self.cur_path[self.path_idx]
+        self.path_idx  += 1
+        ar, ac = self.agent_pos
+
+        if (ar, ac) == self.goal:
+            self._cell(ar, ac, COLORS[GOAL])
+            self.running = False
+            self._stop_timer()
+            messagebox.showinfo("Done", f"Goal reached!  Cost: {self.lbl_cost.get()} steps")
+            return
+
+        if self.grid[ar][ac] not in (START, GOAL):
+            self._cell(ar, ac, COLORS["agent"])
+
+        if self._spawn_obstacle():
+            self._replan(self.agent_pos)
+            return
+
+        self.anim_id = self.root.after(ANIM_MS*4, self._move)
+
+    def _spawn_obstacle(self):
+        if random.random() > SPAWN_CHANCE:
+            return False
+        empties = [(r,c) for r in range(self.rows)
+                         for c in range(self.cols)
+                         if self.grid[r][c] == EMPTY]
+        if not empties:
+            return False
+        tr, tc = random.choice(empties)
+        self.grid[tr][tc] = WALL
+        self._cell(tr, tc)
+        return (tr, tc) in self.cur_path[self.path_idx:]
+
+    def _replan(self, new_start):
+        h = self._get_h()
+        if self.algo_var.get() == "A*":
+            path, _, _ = astar(self.grid, new_start, self.goal, h)
+        else:
+            path, _, _ = greedy_bfs(self.grid, new_start, self.goal, h)
+
+        if path is None:
+            self.running = False
+            self._stop_timer()
+            messagebox.showwarning("Trapped", "No path from current position.")
+            return
+
+        self.cur_path = path
+        self.path_idx = 1
+        self.lbl_cost.set(str(len(path) - 1))
+        for r, c in path[1:]:
+            if self.grid[r][c] not in (START, GOAL, WALL):
+                self._cell(r, c, COLORS["path"])
+        self.anim_id = self.root.after(ANIM_MS*4, self._move)
+
+    # ══════════════════════════════════════════════════════════
+    #  UTILITY
     # ══════════════════════════════════════════════════════════
 
     def _stop(self):
-        self.animator.stop()
+        self.running = False
+        self._stop_timer()
+        if self.anim_id:
+            self.root.after_cancel(self.anim_id)
+            self.anim_id = None
 
     def _clear_path(self):
-        self.animator.stop()
-        self.grid_obj.refresh_all_cells()
-        self.m_nodes.set("0")
-        self.m_cost.set("0")
-        self.m_time.set("0.00 ms")
+        for r in range(self.rows):
+            for c in range(self.cols):
+                self._cell(r, c)
+        self._nodes_so_far = 0
+        self.lbl_nodes.set("0")
+        self.lbl_cost.set("0")
+        self.lbl_time.set("0 ms")
 
     def _clear_all(self):
         self._stop()
-        self.grid_obj.reset()
-        self.m_nodes.set("0")
-        self.m_cost.set("0")
-        self.m_time.set("0.00 ms")
-
+        self._reset_grid()
+        self._redraw()
+        self._nodes_so_far = 0
+        self.lbl_nodes.set("0")
+        self.lbl_cost.set("0")
+        self.lbl_time.set("0 ms")
 
 # ─────────────────────────────────────────────────────────────
 #  ENTRY POINT
@@ -943,18 +746,7 @@ class App:
 if __name__ == "__main__":
     root = tk.Tk()
     root.update_idletasks()
-    sw, sh = root.winfo_screenwidth(), root.winfo_screenheight()
-    root.geometry(f"+{sw // 10}+{sh // 20}")
+    w, h = root.winfo_screenwidth(), root.winfo_screenheight()
+    root.geometry(f"+{w//10}+{h//20}")
     App(root)
     root.mainloop()
-
-
-
-
-
-
-
-
-
-
-
